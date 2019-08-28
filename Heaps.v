@@ -103,7 +103,6 @@ Definition iso_heap_segment (f f' : nat -> nat -> Prop) H1 H2 :=
 
 Definition iso_heap f := iso_heap_segment f f.
 
-
 Lemma value_eval_name H v :
   value v -> eval_name H v H v.
 Proof. by inversion 1. Qed.
@@ -160,6 +159,11 @@ Qed.
 
 Hint Resolve eval_name_heap.
 
+Lemma red_name_appLseq H H' t2s : forall t1 t1',
+  red_name H t1 H' t1' ->
+  red_name H (foldl App t1 t2s) H' (foldl App t1' t2s).
+Proof. induction t2s => ? ? //= /red_name_appL. eauto. Qed.
+  
 Lemma red_name_appL_multi_aux p p' t2 :
   clos_refl_trans _ (fun p p' => red_name p.1 p.2 p'.1 p'.2) p p' ->
   forall H H' t1 t1',
@@ -179,6 +183,11 @@ Corollary red_name_appL_multi H H' t1 t1' t2 :
   clos_refl_trans _ (fun p p' => red_name p.1 p.2 p'.1 p'.2) (H, t1) (H', t1') ->
   clos_refl_trans _ (fun p p' => red_name p.1 p.2 p'.1 p'.2) (H, App t1 t2) (H', App t1' t2).
 Proof. move => /red_name_appL_multi_aux. by apply. Qed.
+
+Lemma red_name_appLseq_multi H H' t2s : forall t1 t1',
+  clos_refl_trans _ (fun p p' => red_name p.1 p.2 p'.1 p'.2) (H, t1) (H', t1') ->
+  clos_refl_trans _ (fun p p' => red_name p.1 p.2 p'.1 p'.2) (H, foldl App t1 t2s) (H', foldl App t1' t2s).
+Proof. induction t2s => ? ? //= /red_name_appL_multi. eauto. Qed.
 
 Lemma value_normal t :
   value t ->
@@ -262,8 +271,8 @@ Lemma diverge_reducible H t :
 Proof.
   induction t; inversion 1; subst; eauto.
   - case (IHt1 H4) => ? [ ? [ ] ]; eauto 6.
-  - move: (eval_name_red_name_multi _ _ _ _ H5) => /clos_rt_rt1n_iff.
-    inversion 1; subst; eauto.
+  - move: (eval_name_red_name_multi _ _ _ _ H5) => /clos_rt_rt1n_iff Hrt.
+    inversion Hrt; subst; eauto.
     destruct y.
     move: H2 => /clos_rt_rt1n_iff /red_name_multi_eval_name. eauto 7.
 Qed.
@@ -427,23 +436,21 @@ Lemma wf_heap_segment_weaken (p p' q q' : nat -> Prop) H H' :
   wf_heap_segment p q H ->
   ( forall l, p' l -> p l ) ->
   ( forall l, q l -> q' l ) ->
-  ( forall l, p' l ->
-    forall t, 
+  ( forall l t, 
     nth None H l = Some t -> 
     nth None H' l = Some t ) ->
   wf_heap_segment p' q' H'.
 Proof.
-  move => Hwf Hdom ? Hext ? Hp.
-  move: (Hp) => /Hdom /Hwf [ ? [ /(Hext _ Hp) -> ] ].
+  move => Hwf Hdom ? Hext ? /Hdom /Hwf [ ? [ /Hext -> ] ].
   eauto using wf_term_impl.
 Qed.
 
 Definition wf_heap_segment_dom p p' q H Hwf Hdom :=
-  wf_heap_segment_weaken p p' q _ H _ Hwf Hdom (fun _ H => H) (fun _ _ _ H => H).
+  wf_heap_segment_weaken p p' q _ H _ Hwf Hdom (fun _ H => H) (fun _ _ H => H).
 Definition wf_heap_segment_cod p q q' H Hwf Hcod :=
-  wf_heap_segment_weaken p _ q q' H _ Hwf (fun _ H => H) Hcod (fun _ _ _ H => H).
-Definition wf_heap_segment_ext p q H H' Hwf :=
-  wf_heap_segment_weaken p _ q _ H H' Hwf (fun _ H => H) (fun _ H => H).
+  wf_heap_segment_weaken p _ q q' H _ Hwf (fun _ H => H) Hcod (fun _ _ H => H).
+Definition wf_heap_segment_ext p p' H H' Hwf :=
+  wf_heap_segment_weaken p _ p' _ H H' Hwf (fun _ H => H) (fun _ H => H).
 
 Lemma wf_heap_segment_union p p' q H :
   wf_heap_segment p q H ->
@@ -465,7 +472,7 @@ Corollary wf_heap_segment_cat p q H Hd :
   wf_heap_segment p q (H ++ Hd).
 Proof.
   move => /wf_heap_segment_ext.
-  apply => l ? ?.
+  apply => l ?.
   by move: nth_cat (leqP (size H) l) => -> [ /(nth_default _) -> | ].
 Qed.
 
@@ -508,11 +515,9 @@ Lemma iso_heap_segment_union fdom fdom' fcod H1 H2 :
   iso_heap_segment (fun l l' => fdom l l' \/ fdom' l l') fcod H1 H2.
 Proof. by move => Hiso Hiso' ? ? [ /Hiso | /Hiso' ]. Qed.
 
-Lemma iso_heap_segment_refl p p' H :
-  wf_heap_segment p p' H ->
-  iso_heap_segment
-    (fun l l' => l = l' /\ p l)
-    (fun l l' => l = l' /\ p' l) H H.
+Lemma iso_heap_segment_refl p q H :
+  wf_heap_segment p q H ->
+  iso_heap_segment (fun l l' => l = l' /\ p l) (fun l l' => l = l' /\ q l) H H.
 Proof.
   move => Hwf ? ? [ -> /Hwf [ ? [ -> ] ] ].
   eauto 6 using corr_term_refl.
@@ -549,7 +554,7 @@ Proof.
   by case: (leqP (size H) l) => [ /(nth_default _) -> | ].
 Qed.
 
-Lemma iso_heap_segment_boundR f f' H H' :
+Lemma iso_heap_boundR f f' H H' :
   iso_heap_segment f f' H H' ->
   forall l l', f l l' ->
   l' < size H'.
@@ -571,100 +576,179 @@ Corollary iso_heap_segment_wf_heap_segmentR f f' H H' :
   wf_heap_segment (fun l' => exists l, f l l') (fun l' => exists l, f' l l') H'.
 Proof. by move => /iso_heap_segment_sym /iso_heap_segment_wf_heap_segmentL. Qed.
 
-Corollary iso_heap_segment_catL fdom fcod H1 H2 Hd :
-  iso_heap_segment fdom fcod H1 H2 ->
-  iso_heap_segment fdom fcod (H1 ++ Hd) H2.
+Corollary iso_heap_segment_catL f f' H1 H2 Hd :
+  iso_heap_segment f f' H1 H2 ->
+  iso_heap_segment f f' (H1 ++ Hd) H2.
 Proof.
   move => /iso_heap_segment_extL.
-  apply => l ? ? ?.
+  apply => l ?.
   by move: nth_cat (leqP (size H1) l) => -> [ /(nth_default _) -> | ].
 Qed.
 
-Corollary iso_heap_segment_rconsL fdom fcod H1 H2 o :
-  iso_heap_segment fdom fcod H1 H2 ->
-  iso_heap_segment fdom fcod (rcons H1 o) H2.
+Corollary iso_heap_segment_rconsL f f' H1 H2 o :
+  iso_heap_segment f f' H1 H2 ->
+  iso_heap_segment f f' (rcons H1 o) H2.
 Proof. by rewrite -cats1 => /iso_heap_segment_catL. Qed.
 
-Corollary iso_heap_segment_catR fdom fcod H1 H2 Hd :
-  iso_heap_segment fdom fcod H1 H2 ->
-  iso_heap_segment fdom fcod H1 (H2 ++ Hd).
+Corollary iso_heap_segment_catR f f' H1 H2 Hd :
+  iso_heap_segment f f' H1 H2 ->
+  iso_heap_segment f f' H1 (H2 ++ Hd).
 Proof. by move => /iso_heap_segment_sym /iso_heap_segment_catL /iso_heap_segment_sym. Qed.
 
-Corollary iso_heap_segment_rconsR fdom fcod H1 H2 o :
-  iso_heap_segment fdom fcod H1 H2 ->
-  iso_heap_segment fdom fcod H1 (rcons H2 o).
+Corollary iso_heap_segment_rconsR f f' H1 H2 o :
+  iso_heap_segment f f' H1 H2 ->
+  iso_heap_segment f f' H1 (rcons H2 o).
 Proof. by rewrite -cats1 => /iso_heap_segment_catR. Qed.
 
-Theorem eval_name_iso_heap H1 H1' t1 v1 :
-  eval_name H1 t1 H1' v1 ->
+Theorem red_name_iso_heap H1 H1' t1 t1' :
+  red_name H1 t1 H1' t1' ->
   forall R H2 t2,
-  corr_term R t2 t1 ->
-  iso_heap R H2 H1 ->
-  exists R' H2' v2,
-  corr_term R' v2 v1 /\
-  iso_heap R' H2' H1' /\
-  eval_name H2 t2 H2' v2 /\
+  corr_term R t1 t2 ->
+  iso_heap R H1 H2 ->
+  exists R' H2' t2',
+  corr_term R' t1' t2' /\
+  iso_heap R' H1' H2' /\
+  red_name H2 t2 H2' t2' /\
   (forall l1 l2, R l1 l2 -> R' l1 l2).
 Proof.
   induction 1; inversion 1; subst => Hheap.
-  - move: (Hheap _ _ H6) => [ ? ].
-    move: H0 => -> [ ? [ ? [ ] ] ]. inversion 1. subst => Hcorr.
-    move: (IHeval_name _ _ _ Hcorr Hheap) =>
-      [ ? [ ? [ ? [ ? [ ? [ ] ] ] ] ] ].
-    repeat (eexists; eauto).
-  - move: (IHeval_name1 _ _ _ H7 Hheap) => [ R' [ H2' [ ? [ ] ] ] ].
-    inversion 1. subst => [ [ ? [ ? ? ] ] ].
-    have Hcorr' : corr_term
-      (fun l l' => R' l l' \/ l = size H2' /\ l' = size H')
-      (subst (scons (Loc (size H2')) Var) t)
-      (subst (scons (Loc (size H')) Var) t0).
-    { apply: corr_term_subst => [ | [ | ? ] ] /=;
-      eauto using corr_term_impl. }
-    have Hheap' : iso_heap
-      (fun l l' => R' l l' \/ l = size H2' /\ l' = size H')
-      (rcons H2' (Some t5)) (rcons H' (Some t2)).
-    { apply: iso_heap_segment_union => [ | ? ? [ -> -> ] ].
-      - apply: iso_heap_segment_rconsL.
+  - move: H0 (Hheap _ _ H4) => -> [ ? [ ] ].
+    inversion 1. subst => [ [ ? [ ? Hterm ] ] ]. repeat (eexists; eauto).
+  - move: (IHred_name _ _ _ H5 Hheap) => [ ? [ ? [ ? [ ? [ ? [ ? ? ] ] ] ] ] ].
+    repeat (eexists; eauto using corr_term_impl).
+  - inversion H4. subst.
+    exists (fun l l' => R l l' \/ l = size H /\ l' = size H2),
+      (rcons H2 (Some t2')), (subst (scons (Loc (size H2)) Var) t').
+    repeat split; eauto.
+    + apply: corr_term_subst => [ | [ | ? ] ] /=;
+      eauto using corr_term_impl.
+    + apply: iso_heap_segment_union => [ | ? ? [ -> -> ] ].
+      * apply: iso_heap_segment_rconsL.
         apply: iso_heap_segment_rconsR.
         apply: iso_heap_segment_cod; eauto.
-      - rewrite !nth_rcons !ltnn !eqxx.
-        repeat eexists. eauto using corr_term_impl. }
-      move: (IHeval_name2 _ _ _ Hcorr' Hheap') =>
-        [ ? [ ? [ ? [ ? [ ? [ ? ? ] ] ] ] ] ].
-    repeat (eexists; eauto).
-  - repeat (eexists; eauto).
-  - have Hcorr' : corr_term
-      (fun l l' => R l l' \/
-        exists n, n < size ts0 /\ l = size H2 + n /\ l' = size H + n)
-      (subst (scat (mkseq (Loc \o addn (size H2)) (size ts0)) Var) t0)
-      (subst (scat (mkseq (Loc \o addn (size H)) (size ts)) Var) t).
-    { apply: corr_term_subst => [ | x ];
+      * rewrite !nth_rcons !ltnn !eqxx.
+        repeat eexists. eauto using corr_term_impl.
+  - eexists (fun l l' => R l l' \/ exists n, n < size ts /\ l = size H + n /\ l' = size H2 + n),
+      (H2 ++ map (@Some _ \o subst (scat (mkseq (Loc \o addn (size H2)) (size ts)) Var)) ts'),
+      (subst (scat (mkseq (Loc \o addn (size H2)) (size ts)) Var) t'). repeat split; eauto.
+    + apply: corr_term_subst => [ | x ];
       eauto using corr_term_impl.
-      rewrite !nth_scat H5.
+      rewrite /s !nth_scat.
       case (leqP (size ts) x) => ?.
       - by rewrite !nth_default ?size_mkseq.
-      - rewrite !nth_mkseq => /=; eauto 6. }
-    have Hheap' : iso_heap
-      (fun l l' => R l l' \/
-        exists n, n < size ts0 /\ l = size H2 + n /\ l' = size H + n)
-      (H2 ++ map (@Some _ \o
-         subst (scat (mkseq (Loc \o addn (size H2)) (size ts0)) Var)) ts0)
-      (H ++ map (@Some _ \o
-         subst (scat (mkseq (Loc \o addn (size H)) (size ts)) Var)) ts).
-    { apply: iso_heap_segment_union =>
-        [ | ? ? [ x [ ? [ -> -> ] ] ] ].
-      - apply: iso_heap_segment_catL.
+      - rewrite !nth_mkseq => /=; eauto 6.
+    + apply: iso_heap_segment_union => [ | ? ? [ x [ ? [ -> -> ] ] ] ].
+      * apply: iso_heap_segment_catL.
         apply: iso_heap_segment_catR.
         apply: iso_heap_segment_cod; eauto.
-      - rewrite !nth_cat !ltnNge !leq_addr !addKn !(nth_map (Var 0)); try congruence.
+      * rewrite !nth_cat !ltnNge !leq_addr !addKn !(nth_map (Var 0)); try congruence.
         repeat eexists.
         apply: corr_term_subst => [ | y ];
         eauto using corr_term_impl.
-        rewrite !nth_scat H5.
-        case (leqP (size ts) y) => ?.
-        + by rewrite !nth_default ?size_mkseq.
-        + rewrite !nth_mkseq => /=; eauto 6. }
-    move: (IHeval_name _ _ _ Hcorr' Hheap') =>
+        rewrite /s !nth_scat.
+        { case (leqP (size ts) y) => ?.
+          - by rewrite !nth_default ?size_mkseq.
+          - rewrite !nth_mkseq => /=; eauto 6. }
+    + by rewrite H4.
+Qed.
+
+Lemma red_name_multi_iso_heap p p' :
+  clos_refl_trans_1n _ (fun p p' => red_name p.1 p.2 p'.1 p'.2) p p' ->
+  forall H1 H1' t1 t1',
+  p = (H1, t1) ->
+  p' = (H1', t1') ->
+  forall R H2 t2,
+  corr_term R t1 t2 ->
+  iso_heap R H1 H2 ->
+  exists R' H2' t2',
+  corr_term R' t1' t2' /\
+  iso_heap R' H1' H2' /\
+  clos_refl_trans _ (fun p p' => red_name p.1 p.2 p'.1 p'.2) (H2, t2) (H2', t2') /\
+  (forall l1 l2, R l1 l2 -> R' l1 l2).
+Proof.
+  induction 1 => ? ? ? ?; inversion 1; inversion 1; subst => [ ? ? ? Hterm Hheap ]; subst.
+  - repeat (eexists; eauto).
+  - destruct y.
+    move: (red_name_iso_heap _ _ _ _ H _ _ _ Hterm Hheap) =>
+      /= [ ? [ ? [ ? [ Hterm' [ Hheap' [ ? ? ] ] ] ] ] ].
+    move: (IHclos_refl_trans_1n _ _ _ _ erefl erefl _ _ _ Hterm' Hheap') =>
       [ ? [ ? [ ? [ ? [ ? [ ? ? ] ] ] ] ] ].
     repeat (eexists; eauto).
+    refine (rt_trans _ _ _ (_, _) _ (rt_step _ _ _ _ _) _) => /=; eauto.
+Qed.
+    
+Theorem eval_name_iso_heap H1 H1' t1 v1
+  (Heval : eval_name H1 t1 H1' v1) R H2 t2
+  (Hterm : corr_term R t1 t2)
+  (Hheap : iso_heap R H1 H2) :
+  exists R' H2' v2,
+  corr_term R' v1 v2 /\
+  iso_heap R' H1' H2' /\
+  eval_name H2 t2 H2' v2 /\
+  (forall l1 l2, R l1 l2 -> R' l1 l2).
+Proof.
+  move: (Heval) =>
+    /eval_name_red_name_multi /clos_rt_rt1n_iff /red_name_multi_iso_heap
+    /(_ _ _ _ _ erefl erefl _ _ _ Hterm Hheap) [ ? [ ? [ ? [ Hterm' [ ? [ ] ] ] ] ] ]
+    /red_name_multi_eval_name Heval'.
+  move: (eval_name_value _ _ _ _ Heval) => /(corr_term_value _ _ _ Hterm') /Heval' ? ?.
+  repeat (eexists; eauto).
+Qed.
+
+Lemma clos_trans_clos_refl_trans A R x y :
+  clos_trans A R x y ->
+  clos_refl_trans A R x y.
+Proof. induction 1; eauto. Qed.
+
+Corollary clos_trans_clos_refl_trans_1n A R x z :
+  clos_trans A R x z ->
+  exists y, R x y /\ clos_refl_trans _ R y z.
+Proof.
+  move => /(clos_trans_t1n _ _ _ _).
+  inversion 1; subst; repeat (eexists; eauto).
+  apply: clos_trans_clos_refl_trans.
+  exact: clos_t1n_trans.
+Qed.
+
+Lemma diverge_name_iso_heap_aux p p' :
+  clos_refl_trans_1n _ (fun p p' => red_name p.1 p.2 p'.1 p'.2) p p' ->
+  forall t2s R H1 H1' H2 t1 t1' t2,
+  p = (H1, t1) ->
+  p' = (H2, t2) ->
+  corr_term R t1 t1' ->
+  iso_heap R H1 H1' ->
+  clos_trans _ (fun p p' => red_name p.1 p.2 p'.1 p'.2) (H1, t1) (H1', foldl App t1' t2s) ->
+  exists R' H2' t2',
+  clos_trans _ (fun p p' => red_name p.1 p.2 p'.1 p'.2) (H2, t2) (H2', foldl App t2' t2s) /\
+  corr_term R' t2 t2' /\
+  iso_heap R' H2 H2' /\
+  (forall l1 l2, R l1 l2 -> R' l1 l2).
+Proof.
+  induction 1; inversion 1; inversion 1; subst => [ Hterm Hheap ].
+  - repeat (eexists; eauto).
+  - destruct y => /(clos_trans_clos_refl_trans_1n _ _ _ _) [ [ H1_ t1_ ] /= [ Hred Hrt ] ].
+    case: (red_name_det _ _ _ _ H _ _ Hred) => /= ? ?. subst.
+    move: (red_name_iso_heap _ _ _ _ Hred _ _ _  Hterm Hheap) =>
+      [ R' [ H1'_ [ t1'_ [ Hterm' [ Hheap' [ Hred' ? ] ] ] ] ] ].
+    have Hrt' : clos_trans _
+      (fun p p' => red_name p.1 p.2 p'.1 p'.2) (H1_, t1_) (H1'_, foldl App t1'_ t2s).
+    { apply: clos_rt_t; eauto.
+      constructor.
+      apply: red_name_appLseq. eauto. }
+    move: (IHclos_refl_trans_1n _ _ _ _ _ _ _ _ erefl erefl Hterm' Hheap' Hrt') =>
+      [ ? [ ? [ ? [ ? [ ? [ ? ? ] ] ] ] ] ].
+    repeat (eexists; eauto).
+Qed.
+
+Lemma diverge_name_iso_heap R H H' t t1 t2s :
+  iso_heap R H H' ->
+  corr_term R t t1 ->
+  clos_trans _ (fun p p' => red_name p.1 p.2 p'.1 p'.2) (H, t) (H', foldl App t1 t2s) ->
+  diverge_name H t.
+Proof.
+  move => Hheap Hterm Ht.
+  apply: red_name_multi_diverge_name => ? ? /clos_rt_rt1n_iff Hrt.
+  move: (diverge_name_iso_heap_aux _ _ Hrt _ _ _ _ _ _ _ _ erefl erefl Hterm Hheap Ht) =>
+    [ ? [ ? [ ? [ /(clos_trans_clos_refl_trans_1n _ _ _ _) [ [ ? ? ] /= [ ? ? ] ] ] ] ] ];
+  repeat (eexists; eauto).
 Qed.
